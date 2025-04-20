@@ -1,0 +1,17 @@
+# For details & more options, see documentation/AppManifests.md in firmware repo
+
+App(
+    appid="flipperjump",  # Must be unique
+    name="Flipper Jump",  # Displayed in menus
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="flipperjump_app",
+    stack_size=2 * 1024,
+    fap_category="Games",
+    # Optional values
+    fap_version="0.1",
+    fap_icon="flipperjump.png",  # 10x10 1-bit PNG
+    fap_description="Adapatation of the legendary game for Flipper Zero",
+    fap_author="kolo",
+    fap_weburl="https://github.com/koloidealmente/flipperzero-jump",
+    fap_icon_assets="images",  # Image assets to compile for this application
+)
