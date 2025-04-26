@@ -138,7 +138,7 @@ void flipperjump_start(void) {
         .score = 0,
         .target_scroll_offset = 0,
         .current_platform = 1,
-        .last_platform_id = -1,
+        .last_platform_id = 0,
     };
     init_platforms(&game);
     Gui* gui = furi_record_open("gui");
