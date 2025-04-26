@@ -36,10 +36,12 @@ typedef struct {
     bool move_left;
     bool move_right;
     float target_scroll_offset;
+    int current_platform;
+    int last_platform_id;
 } GameState;
 
 static void draw_flipper(Canvas* canvas, int x, int y) {
-    canvas_draw_str_aligned(canvas, x + PLAYER_WIDTH/2, y + 3, AlignCenter, AlignCenter, "><((°>");
+    canvas_draw_str_aligned(canvas, x + PLAYER_WIDTH/2, y + 3, AlignCenter, AlignCenter, "(-_-)");
 }
 
 static void input_callback(InputEvent* event, void* context) {
@@ -68,12 +70,19 @@ static void render_callback(Canvas* canvas, void* context) {
     draw_flipper(canvas, (int)game->player.x, draw_y);
 }
 
+void spawn_new_platform(GameState* game) {
+    int next = game->current_platform % PLATFORM_COUNT;
+    game->platforms[next].x = rand() % (SCREEN_WIDTH - PLATFORM_WIDTH);
+    game->platforms[next].y = game->platforms[(next + PLATFORM_COUNT - 1) % PLATFORM_COUNT].y - (rand() % 20 + 20);
+    game->current_platform++;
+}
+
 void init_platforms(GameState* game) {
-    game->platforms[0].x = SCREEN_WIDTH / 2 - PLATFORM_WIDTH / 2;
+    game->platforms[0].x = (float)SCREEN_WIDTH / 2 - (float)PLATFORM_WIDTH / 2;
     game->platforms[0].y = SCREEN_HEIGHT - 10;
     for(int i = 1; i < PLATFORM_COUNT; i++) {
         game->platforms[i].x = rand() % (SCREEN_WIDTH - PLATFORM_WIDTH);
-        game->platforms[i].y = SCREEN_HEIGHT - i * 30;
+        game->platforms[i].y = game->platforms[i - 1].y - 30;
     }
 }
 
@@ -94,9 +103,18 @@ void update_game(GameState* game) {
                 player->y + PLAYER_HEIGHT >= p->y &&
                 player->y + PLAYER_HEIGHT <= p->y + PLATFORM_HEIGHT
             ) {
-                player->vy = JUMP_VELOCITY;
-                game->target_scroll_offset += 20.0f;
+                if(game->last_platform_id != i) {
+                    // Прыгнули на новую платформу!
+                    player->vy = JUMP_VELOCITY;
+                    game->target_scroll_offset += 20.0f;
+                    spawn_new_platform(game);
+                    game->last_platform_id = i;
+                } else {
+                    // Стоим на той же самой — просто подпрыгиваем
+                    player->vy = JUMP_VELOCITY;
+                }
                 break;
+                
             }
         }
     }
@@ -105,14 +123,6 @@ void update_game(GameState* game) {
         float step = delta * 0.2f;
         if(step < 0.5f) step = 0.5f;
         game->scroll_offset += step;
-        for(int i = 0; i < PLATFORM_COUNT; i++) {
-            game->platforms[i].y += step;
-            if(game->platforms[i].y > SCREEN_HEIGHT) {
-                game->platforms[i].y = -(rand() % 20 + 10);
-                game->platforms[i].x = rand() % (SCREEN_WIDTH - PLATFORM_WIDTH);
-                game->score++;
-            }
-        }
     }
     if(player->y > SCREEN_HEIGHT) {
         game->running = false;
@@ -122,11 +132,13 @@ void update_game(GameState* game) {
 void flipperjump_start(void) {
     srand(furi_get_tick());
     GameState game = {
-        .player = {.x = SCREEN_WIDTH/2, .y = SCREEN_HEIGHT - 20, .vy = 0, .alive = true},
+        .player = {.x = (float)SCREEN_WIDTH/2, .y = SCREEN_HEIGHT - 20, .vy = 0, .alive = true},
         .scroll_offset = 0,
         .running = true,
         .score = 0,
         .target_scroll_offset = 0,
+        .current_platform = 1,
+        .last_platform_id = -1,
     };
     init_platforms(&game);
     Gui* gui = furi_record_open("gui");
