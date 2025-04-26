@@ -14,7 +14,7 @@
 #define PLATFORM_HEIGHT 5
 #define PLATFORM_COUNT 4
 #define GRAVITY 0.15f
-#define JUMP_VELOCITY -3.0f
+#define JUMP_VELOCITY -3.5f
 #define PLAYER_SPEED 2.0f
 
 typedef struct {
@@ -60,15 +60,25 @@ static void input_callback(InputEvent* event, void* context) {
 static void render_callback(Canvas* canvas, void* context) {
     GameState* game = context;
     canvas_clear(canvas);
+
+    // Рисуем платформы
     for(int i = 0; i < PLATFORM_COUNT; i++) {
         int py = (int)(game->platforms[i].y + game->scroll_offset);
         if(py > -PLATFORM_HEIGHT && py < SCREEN_HEIGHT) {
             canvas_draw_box(canvas, (int)game->platforms[i].x, py, PLATFORM_WIDTH, PLATFORM_HEIGHT);
         }
     }
+
+    // Рисуем игрока
     int draw_y = (int)(game->player.y + game->scroll_offset);
     draw_flipper(canvas, (int)game->player.x, draw_y);
+
+    // Рисуем счёт
+    char score_text[16];
+    snprintf(score_text, sizeof(score_text), "Score: %d", game->score);
+    canvas_draw_str_aligned(canvas, SCREEN_WIDTH - 2, 0, AlignRight, AlignTop, score_text);
 }
+
 
 void spawn_new_platform(GameState* game) {
     int next = game->current_platform % PLATFORM_COUNT;
@@ -109,6 +119,7 @@ void update_game(GameState* game) {
                     game->target_scroll_offset += 20.0f;
                     spawn_new_platform(game);
                     game->last_platform_id = i;
+                    game->score++; // Увеличиваем счёт
                 } else {
                     // Стоим на той же самой — просто подпрыгиваем
                     player->vy = JUMP_VELOCITY;
