@@ -49,7 +49,7 @@ typedef struct {
 } GameState;
 
 static void draw_flipper(Canvas* canvas, int x, int y) {
-    canvas_draw_str_aligned(canvas, x + PLAYER_WIDTH / 2, y + 3, AlignCenter, AlignCenter, "(-_-)"); 
+    canvas_draw_str_aligned(canvas, x + PLAYER_WIDTH / 2, y + 3, AlignCenter, AlignCenter, "{*-*}"); 
 }
 
 static void input_callback(InputEvent* event, void* context) {
@@ -98,9 +98,9 @@ static void render_callback(Canvas* canvas, void* context) {
     // Отрисовываем спрайт игрока на текущих координатах
     draw_flipper(canvas, (int)game->player.x, (int)game->player.y);
 
-    // Отображаем счет в правом верхнем углу
+    // Отображаем значок и счет в правом верхнем углу
     char score_text[16];
-    snprintf(score_text, sizeof(score_text), "Score: %d", game->score);
+    snprintf(score_text, sizeof(score_text), "* %d", game->score);
     canvas_draw_str_aligned(canvas, SCREEN_WIDTH - 2, 0, AlignRight, AlignTop, score_text);
 }
 
@@ -295,9 +295,70 @@ void show_game_over(Gui* gui, GameState* game) {
     view_port_free(viewport);
 }
 
+typedef struct {
+    int progress;  // 0-100
+} LoadingState;
+
+static void loading_render_callback(Canvas* canvas, void* context) {
+    LoadingState* state = context;
+    canvas_clear(canvas);
+    
+    // Название игры по центру
+    canvas_set_font(canvas, FontPrimary);
+    canvas_draw_str_aligned(canvas, SCREEN_WIDTH / 2, 20, AlignCenter, AlignTop, "Flipper Jump");
+    
+    // Полоса загрузки
+    int bar_width = 100;
+    int bar_height = 8;
+    int bar_x = (SCREEN_WIDTH - bar_width) / 2;
+    int bar_y = 45;
+    
+    // Рамка полосы загрузки
+    canvas_draw_frame(canvas, bar_x, bar_y, bar_width, bar_height);
+    
+    // Заполненная часть
+    int filled_width = (bar_width - 4) * state->progress / 100;
+    if (filled_width > 0) {
+        canvas_draw_box(canvas, bar_x + 2, bar_y + 2, filled_width, bar_height - 4);
+    }
+    
+    // Проценты под полосой
+    char progress_text[8];
+    snprintf(progress_text, sizeof(progress_text), "%d%%", state->progress);
+    canvas_set_font(canvas, FontSecondary);
+    canvas_draw_str_aligned(canvas, SCREEN_WIDTH / 2, bar_y + bar_height + 4, AlignCenter, AlignTop, progress_text);
+}
+
+static void show_loading_screen(Gui* gui) {
+    ViewPort* viewport = view_port_alloc();
+    LoadingState state = { .progress = 0 };
+
+    view_port_draw_callback_set(viewport, loading_render_callback, &state);
+    gui_add_view_port(gui, viewport, GuiLayerFullscreen);
+
+    // Анимация загрузки
+    for (int i = 0; i <= 100; i += 2) {
+        state.progress = i;
+        view_port_update(viewport);
+        furi_delay_ms(40);  // Общая длительность ~2 секунды
+    }
+
+    gui_remove_view_port(gui, viewport);
+    view_port_free(viewport);
+}
+
 void flipperjump_start(void) {
     // Инициализация генератора случайных чисел
     srand(furi_get_tick());
+    
+    // Открываем GUI
+    Gui* gui = furi_record_open("gui");
+    if (!gui) {
+        return;  // Ошибка инициализации
+    }
+    
+    // Показываем экран загрузки
+    show_loading_screen(gui);
     
     // Инициализация игрового состояния
     GameState game = {
@@ -319,12 +380,6 @@ void flipperjump_start(void) {
     game.player.y = game.platforms[0].y - PLAYER_HEIGHT;
     game.player.velocity_y = 0;
     game.player.is_alive = true;
-    
-    // Открываем GUI
-    Gui* gui = furi_record_open("gui");
-    if (!gui) {
-        return;  // Ошибка инициализации
-    }
     
     // Создаем viewport
     ViewPort* viewport = view_port_alloc();
