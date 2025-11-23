@@ -17,8 +17,11 @@
 #define PLATFORM_DISTANCE 30.0f
 #define SCROLL_SPEED 1.5f
 #define START_PLATFORM_Y (SCREEN_HEIGHT - 15)
-#define GRAVITY 0.2f
-#define JUMP_VELOCITY -4.0f
+#define BASE_GRAVITY 0.2f
+#define BASE_JUMP_VELOCITY -4.0f
+#define GRAVITY_INCREMENT 0.03f
+#define JUMP_INCREMENT -0.35f
+#define SPEED_UP_INTERVAL 10
 #define HORIZONTAL_SPEED 2.0f
 #define DEATH_BOUNDARY SCREEN_HEIGHT
 
@@ -46,6 +49,8 @@ typedef struct {
     float scroll_offset;   // Текущее смещение для плавного скроллинга
     float target_scroll;   // Целевое смещение
     bool scrolling;        // Идет ли скроллинг
+    float gravity;         // Текущая гравитация
+    float jump_velocity;   // Текущая скорость прыжка
 } GameState;
 
 static void draw_flipper(Canvas* canvas, int x, int y) {
@@ -104,8 +109,8 @@ static void render_callback(Canvas* canvas, void* context) {
     canvas_draw_str_aligned(canvas, SCREEN_WIDTH - 2, 0, AlignRight, AlignTop, score_text);
 }
 
-static void apply_gravity(Player* player) {
-    player->velocity_y += GRAVITY;
+static void apply_gravity(Player* player, float gravity) {
+    player->velocity_y += gravity;
 }
 
 static bool check_death_boundary(Player* player) {
@@ -172,11 +177,18 @@ static void check_platform_collision(GameState* game) {
                player->y + PLAYER_HEIGHT <= platform_y + PLATFORM_HEIGHT + 5) {
                 
                 // Прыжок с платформы
-                player->velocity_y = JUMP_VELOCITY;
+                player->velocity_y = game->jump_velocity;
                 
                 // Если это верхняя платформа и мы еще не скроллим
                 if(i != game->current_platform && !game->scrolling) {
                     game->score++;
+                    
+                    // Увеличиваем скорость каждые 10 платформ
+                    if(game->score % SPEED_UP_INTERVAL == 0) {
+                        game->gravity += GRAVITY_INCREMENT;
+                        game->jump_velocity += JUMP_INCREMENT;
+                    }
+                    
                     game->scrolling = true;
                     game->target_scroll = PLATFORM_DISTANCE;
                     
@@ -202,7 +214,7 @@ static void update_physics(GameState* game) {
     Player* player = &game->player;
     
     // Применяем гравитацию
-    apply_gravity(player);
+    apply_gravity(player, game->gravity);
     
     // Обновляем вертикальную позицию
     float old_y = player->y;
@@ -372,7 +384,9 @@ void flipperjump_start(void) {
         .current_platform = 0,
         .scroll_offset = 0,
         .target_scroll = 0,
-        .scrolling = false
+        .scrolling = false,
+        .gravity = BASE_GRAVITY,
+        .jump_velocity = BASE_JUMP_VELOCITY
     };
     
     // Инициализируем платформы
