@@ -134,11 +134,11 @@ static void update_scroll(GameState* game) {
         game->scroll_offset = game->target_scroll;
         game->scrolling = false;
         
-        // Применяем финальное смещение к платформам
+        // Применяем финальное смещение ТОЛЬКО к платформам
+        // Игрок уже двигался естественным образом во время скроллинга
         for(int i = 0; i < MAX_PLATFORMS; i++) {
             game->platforms[i].y += game->scroll_offset;
         }
-        game->player.y += game->scroll_offset;
         game->scroll_offset = 0;
         game->target_scroll = 0;
         
@@ -213,6 +213,9 @@ static void update_physics(GameState* game) {
         // Персонаж движется вверх - скроллим платформы вниз с той же скоростью
         float scroll_delta = player->y - old_y;  // Отрицательное значение
         game->scroll_offset -= scroll_delta;  // Инвертируем для движения вниз
+        
+        // Компенсируем движение игрока, чтобы он оставался на месте визуально
+        player->y = old_y;
         
         // Проверяем, достигли ли цели
         if(game->scroll_offset >= game->target_scroll) {
