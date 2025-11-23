@@ -4,6 +4,7 @@
 #include <input/input.h>
 #include <furi.h>
 #include <stdlib.h>
+#include <math.h>
 #include <furi_hal.h>
 
 #define SCREEN_WIDTH 128
@@ -12,9 +13,12 @@
 #define PLAYER_HEIGHT 8
 #define PLATFORM_WIDTH 24
 #define PLATFORM_HEIGHT 4
-#define MAX_PLATFORMS 8
-#define GRAVITY 0.3f
-#define JUMP_VELOCITY -3.0f
+#define MAX_PLATFORMS 2
+#define PLATFORM_DISTANCE 30.0f
+#define SCROLL_SPEED 1.5f
+#define START_PLATFORM_Y (SCREEN_HEIGHT - 15)
+#define GRAVITY 0.2f
+#define JUMP_VELOCITY -4.0f
 #define HORIZONTAL_SPEED 2.0f
 #define DEATH_BOUNDARY SCREEN_HEIGHT
 
@@ -38,7 +42,10 @@ typedef struct {
     bool is_running;
     bool move_left;
     bool move_right;
-    int last_platform_touched;
+    int current_platform;  // Индекс текущей платформы (0 или 1)
+    float scroll_offset;   // Текущее смещение для плавного скроллинга
+    float target_scroll;   // Целевое смещение
+    bool scrolling;        // Идет ли скроллинг
 } GameState;
 
 static void draw_flipper(Canvas* canvas, int x, int y) {
@@ -76,12 +83,13 @@ static void render_callback(Canvas* canvas, void* context) {
     const GameState* game = (const GameState*)context;
     canvas_clear(canvas);
 
-    // Отрисовываем платформы
+    // Отрисовываем платформы с учетом скроллинга
     for(int i = 0; i < MAX_PLATFORMS; i++) {
         if(game->platforms[i].active) {
+            int draw_y = (int)(game->platforms[i].y + game->scroll_offset);
             canvas_draw_box(canvas, 
                 (int)game->platforms[i].x, 
-                (int)game->platforms[i].y, 
+                draw_y, 
                 PLATFORM_WIDTH, 
                 PLATFORM_HEIGHT);
         }
@@ -105,17 +113,39 @@ static bool check_death_boundary(Player* player) {
 }
 
 static void init_platforms(GameState* game) {
-    // Первая платформа - стартовая, в центре внизу
+    // Платформа 0 - нижняя (стартовая)
     game->platforms[0].x = (float)SCREEN_WIDTH / 2 - (float)PLATFORM_WIDTH / 2;
-    game->platforms[0].y = SCREEN_HEIGHT - 15;
+    game->platforms[0].y = START_PLATFORM_Y;
     game->platforms[0].active = true;
     
-    // Генерируем остальные платформы выше
-    for(int i = 1; i < MAX_PLATFORMS; i++) {
-        game->platforms[i].x = (float)(rand() % (SCREEN_WIDTH - PLATFORM_WIDTH));
-        game->platforms[i].y = game->platforms[i-1].y - (20 + rand() % 15);
-        game->platforms[i].active = true;
+    // Платформа 1 - верхняя (следующая)
+    game->platforms[1].x = (float)(rand() % (SCREEN_WIDTH - PLATFORM_WIDTH));
+    game->platforms[1].y = START_PLATFORM_Y - PLATFORM_DISTANCE;
+    game->platforms[1].active = true;
+}
+
+static void update_scroll(GameState* game) {
+    if(!game->scrolling) return;
+    
+    // Проверяем, достигли ли цели
+    float diff = game->target_scroll - game->scroll_offset;
+    if(fabsf(diff) < 0.5f) {
+        // Достигли цели - завершаем скроллинг
+        game->scroll_offset = game->target_scroll;
+        game->scrolling = false;
+        
+        // Применяем финальное смещение к платформам
+        for(int i = 0; i < MAX_PLATFORMS; i++) {
+            game->platforms[i].y += game->scroll_offset;
+        }
+        game->player.y += game->scroll_offset;
+        game->scroll_offset = 0;
+        game->target_scroll = 0;
+        
+        // Переключаем текущую платформу
+        game->current_platform = 1 - game->current_platform;  // 0->1 или 1->0
     }
+    // Скроллинг происходит автоматически через движение персонажа
 }
 
 static void check_platform_collision(GameState* game) {
@@ -126,27 +156,37 @@ static void check_platform_collision(GameState* game) {
         return;
     }
     
+    // Проверяем обе платформы
     for(int i = 0; i < MAX_PLATFORMS; i++) {
         if(!game->platforms[i].active) continue;
         
         Platform* platform = &game->platforms[i];
+        float platform_y = platform->y + game->scroll_offset;
         
         // Проверяем пересечение по X
         if(player->x + PLAYER_WIDTH > platform->x && 
            player->x < platform->x + PLATFORM_WIDTH) {
             
             // Проверяем пересечение по Y (игрок приземляется сверху)
-            if(player->y + PLAYER_HEIGHT >= platform->y && 
-               player->y + PLAYER_HEIGHT <= platform->y + PLATFORM_HEIGHT + 5) {
+            if(player->y + PLAYER_HEIGHT >= platform_y && 
+               player->y + PLAYER_HEIGHT <= platform_y + PLATFORM_HEIGHT + 5) {
                 
                 // Прыжок с платформы
                 player->velocity_y = JUMP_VELOCITY;
-                player->y = platform->y - PLAYER_HEIGHT;
                 
-                // Увеличиваем счет только если это новая платформа
-                if(game->last_platform_touched != i) {
+                // Если это верхняя платформа и мы еще не скроллим
+                if(i != game->current_platform && !game->scrolling) {
                     game->score++;
-                    game->last_platform_touched = i;
+                    game->scrolling = true;
+                    game->target_scroll = PLATFORM_DISTANCE;
+                    
+                    // Сразу генерируем новую платформу на старом месте
+                    int old_platform = game->current_platform;
+                    int new_platform = i;
+                    
+                    // Старая платформа становится новой верхней (до скроллинга)
+                    game->platforms[old_platform].x = (float)(rand() % (SCREEN_WIDTH - PLATFORM_WIDTH));
+                    game->platforms[old_platform].y = game->platforms[new_platform].y - PLATFORM_DISTANCE;
                 }
                 break;
             }
@@ -165,7 +205,23 @@ static void update_physics(GameState* game) {
     apply_gravity(player);
     
     // Обновляем вертикальную позицию
+    float old_y = player->y;
     player->y += player->velocity_y;
+    
+    // Если идет скроллинг, двигаем платформы синхронно с персонажем
+    if(game->scrolling && player->velocity_y < 0) {
+        // Персонаж движется вверх - скроллим платформы вниз с той же скоростью
+        float scroll_delta = player->y - old_y;  // Отрицательное значение
+        game->scroll_offset -= scroll_delta;  // Инвертируем для движения вниз
+        
+        // Проверяем, достигли ли цели
+        if(game->scroll_offset >= game->target_scroll) {
+            game->scroll_offset = game->target_scroll;
+        }
+    }
+    
+    // Обновляем скроллинг (проверка завершения)
+    update_scroll(game);
     
     // Проверяем коллизию с платформами
     check_platform_collision(game);
@@ -249,7 +305,10 @@ void flipperjump_start(void) {
         .is_running = true,
         .move_left = false,
         .move_right = false,
-        .last_platform_touched = -1
+        .current_platform = 0,
+        .scroll_offset = 0,
+        .target_scroll = 0,
+        .scrolling = false
     };
     
     // Инициализируем платформы
