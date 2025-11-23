@@ -265,6 +265,7 @@ static void update_physics(GameState* game) {
 typedef struct {
     bool waiting;
     int score;
+    int high_score;
 } GameOverState;
 
 static void game_over_render_callback(Canvas* canvas, void* context) {
@@ -276,24 +277,29 @@ static void game_over_render_callback(Canvas* canvas, void* context) {
     char score_text[32];
     snprintf(score_text, sizeof(score_text), "Score: %d", state->score);
     canvas_set_font(canvas, FontSecondary);
-    canvas_draw_str_aligned(canvas, SCREEN_WIDTH / 2, 30, AlignCenter, AlignTop, score_text);
+    canvas_draw_str_aligned(canvas, SCREEN_WIDTH / 2, 25, AlignCenter, AlignTop, score_text);
+
+    if (state->score >= state->high_score) {
+        canvas_draw_str_aligned(canvas, SCREEN_WIDTH / 2, 38, AlignCenter, AlignTop, "New Record!");
+    }
 
     canvas_set_font(canvas, FontSecondary);
-    canvas_draw_str_aligned(canvas, SCREEN_WIDTH / 2, 50, AlignCenter, AlignTop, "Press BACK");
+    canvas_draw_str_aligned(canvas, SCREEN_WIDTH / 2, 52, AlignCenter, AlignTop, "Press any key");
 }
 
 static void game_over_input_callback(InputEvent* event, void* context) {
     GameOverState* state = context;
-    if (event->type == InputTypeShort && event->key == InputKeyBack) {
+    if (event->type == InputTypeShort) {
         state->waiting = false;
     }
 }
 
-void show_game_over(Gui* gui, GameState* game) {
+static bool show_game_over(Gui* gui, int score, int high_score) {
     ViewPort* viewport = view_port_alloc();
     GameOverState state = {
         .waiting = true,
-        .score = game->score,
+        .score = score,
+        .high_score = high_score,
     };
 
     view_port_draw_callback_set(viewport, game_over_render_callback, &state);
@@ -308,6 +314,77 @@ void show_game_over(Gui* gui, GameState* game) {
 
     gui_remove_view_port(gui, viewport);
     view_port_free(viewport);
+    
+    return true; // Возврат в меню
+}
+
+typedef struct {
+    bool waiting;
+    bool start_game;
+    int high_score;
+} MainMenuState;
+
+static void main_menu_render_callback(Canvas* canvas, void* context) {
+    MainMenuState* state = context;
+    canvas_clear(canvas);
+    
+    // Лучший счет в левом верхнем углу
+    char high_score_text[32];
+    snprintf(high_score_text, sizeof(high_score_text), "Best: %d", state->high_score);
+    canvas_set_font(canvas, FontSecondary);
+    canvas_draw_str_aligned(canvas, 2, 0, AlignLeft, AlignTop, high_score_text);
+    
+    // ASCII-арт дельфина
+    canvas_set_font(canvas, FontSecondary);
+    canvas_draw_str_aligned(canvas, SCREEN_WIDTH / 2, 8, AlignCenter, AlignTop, "    ,");
+    canvas_draw_str_aligned(canvas, SCREEN_WIDTH / 2, 14, AlignCenter, AlignTop, "  _/|");
+    canvas_draw_str_aligned(canvas, SCREEN_WIDTH / 2, 20, AlignCenter, AlignTop, " (o o)");
+    canvas_draw_str_aligned(canvas, SCREEN_WIDTH / 2, 26, AlignCenter, AlignTop, "  \\_/");
+    
+    // Название игры
+    canvas_set_font(canvas, FontPrimary);
+    canvas_draw_str_aligned(canvas, SCREEN_WIDTH / 2, 36, AlignCenter, AlignTop, "Flipper Jump");
+    
+    // Кнопка старта
+    canvas_set_font(canvas, FontSecondary);
+    canvas_draw_str_aligned(canvas, SCREEN_WIDTH / 2, 52, AlignCenter, AlignTop, "Press OK to start");
+}
+
+static void main_menu_input_callback(InputEvent* event, void* context) {
+    MainMenuState* state = context;
+    if (event->type == InputTypeShort) {
+        if (event->key == InputKeyOk) {
+            state->start_game = true;
+            state->waiting = false;
+        } else if (event->key == InputKeyBack) {
+            state->start_game = false;
+            state->waiting = false;
+        }
+    }
+}
+
+static bool show_main_menu(Gui* gui, int high_score) {
+    ViewPort* viewport = view_port_alloc();
+    MainMenuState state = {
+        .waiting = true,
+        .start_game = false,
+        .high_score = high_score,
+    };
+
+    view_port_draw_callback_set(viewport, main_menu_render_callback, &state);
+    view_port_input_callback_set(viewport, main_menu_input_callback, &state);
+
+    gui_add_view_port(gui, viewport, GuiLayerFullscreen);
+
+    while (state.waiting) {
+        view_port_update(viewport);
+        furi_delay_ms(30);
+    }
+
+    gui_remove_view_port(gui, viewport);
+    view_port_free(viewport);
+    
+    return state.start_game;
 }
 
 typedef struct {
@@ -372,58 +449,74 @@ void flipperjump_start(void) {
         return;  // Ошибка инициализации
     }
     
-    // Показываем экран загрузки
+    // Показываем экран загрузки один раз
     show_loading_screen(gui);
     
-    // Инициализация игрового состояния
-    GameState game = {
-        .score = 0,
-        .is_running = true,
-        .move_left = false,
-        .move_right = false,
-        .current_platform = 0,
-        .scroll_offset = 0,
-        .target_scroll = 0,
-        .scrolling = false,
-        .gravity = BASE_GRAVITY,
-        .jump_velocity = BASE_JUMP_VELOCITY
-    };
+    int high_score = 0;
+    bool running = true;
     
-    // Инициализируем платформы
-    init_platforms(&game);
-    
-    // Размещаем игрока на первой платформе
-    game.player.x = game.platforms[0].x + (PLATFORM_WIDTH - PLAYER_WIDTH) / 2;
-    game.player.y = game.platforms[0].y - PLAYER_HEIGHT;
-    game.player.velocity_y = 0;
-    game.player.is_alive = true;
-    
-    // Создаем viewport
-    ViewPort* viewport = view_port_alloc();
-    if (!viewport) {
-        furi_record_close("gui");
-        return;  // Ошибка инициализации
+    // Главный цикл игры с меню
+    while (running) {
+        // Показываем главное меню
+        if (!show_main_menu(gui, high_score)) {
+            break; // Выход из игры (нажата кнопка Back)
+        }
+        
+        // Инициализация игрового состояния
+        GameState game = {
+            .score = 0,
+            .is_running = true,
+            .move_left = false,
+            .move_right = false,
+            .current_platform = 0,
+            .scroll_offset = 0,
+            .target_scroll = 0,
+            .scrolling = false,
+            .gravity = BASE_GRAVITY,
+            .jump_velocity = BASE_JUMP_VELOCITY
+        };
+        
+        // Инициализируем платформы
+        init_platforms(&game);
+        
+        // Размещаем игрока на первой платформе
+        game.player.x = game.platforms[0].x + (PLATFORM_WIDTH - PLAYER_WIDTH) / 2;
+        game.player.y = game.platforms[0].y - PLAYER_HEIGHT;
+        game.player.velocity_y = 0;
+        game.player.is_alive = true;
+        
+        // Создаем viewport
+        ViewPort* viewport = view_port_alloc();
+        if (!viewport) {
+            break;
+        }
+        
+        // Настраиваем callbacks
+        view_port_draw_callback_set(viewport, render_callback, &game);
+        view_port_input_callback_set(viewport, input_callback, &game);
+        
+        // Добавляем viewport в GUI
+        gui_add_view_port(gui, viewport, GuiLayerFullscreen);
+        
+        // Главный игровой цикл: update → render → delay
+        while (game.is_running) {
+            update_physics(&game);
+            view_port_update(viewport);
+            furi_delay_ms(30);  // ~30 FPS
+        }
+        
+        // Очистка viewport
+        gui_remove_view_port(gui, viewport);
+        view_port_free(viewport);
+        
+        // Обновляем лучший счет
+        if (game.score > high_score) {
+            high_score = game.score;
+        }
+        
+        // Показываем экран game over и возвращаемся в меню
+        show_game_over(gui, game.score, high_score);
     }
     
-    // Настраиваем callbacks
-    view_port_draw_callback_set(viewport, render_callback, &game);
-    view_port_input_callback_set(viewport, input_callback, &game);
-    
-    // Добавляем viewport в GUI
-    gui_add_view_port(gui, viewport, GuiLayerFullscreen);
-    
-    // Главный игровой цикл: update → render → delay
-    while (game.is_running) {
-        update_physics(&game);
-        view_port_update(viewport);
-        furi_delay_ms(30);  // ~30 FPS
-    }
-    
-    // Показываем экран game over
-    show_game_over(gui, &game);
-    
-    // Очистка ресурсов в обратном порядке
-    gui_remove_view_port(gui, viewport);
-    view_port_free(viewport);
     furi_record_close("gui");
 }
