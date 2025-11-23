@@ -11,33 +11,34 @@
 #define PLAYER_WIDTH 8
 #define PLAYER_HEIGHT 8
 #define PLATFORM_WIDTH 24
-#define PLATFORM_HEIGHT 5
-#define PLATFORM_COUNT 4
-#define GRAVITY 0.15f
-#define JUMP_VELOCITY -3.5f
-#define PLAYER_SPEED 2.0f
+#define PLATFORM_HEIGHT 4
+#define MAX_PLATFORMS 8
+#define GRAVITY 0.3f
+#define JUMP_VELOCITY -3.0f
+#define HORIZONTAL_SPEED 2.0f
+#define DEATH_BOUNDARY SCREEN_HEIGHT
 
 typedef struct {
-    float x, y;
-    float vy;
-    bool alive;
+    float x;
+    float y;
+    float velocity_y;
+    bool is_alive;
 } Player;
 
 typedef struct {
-    float x, y;
+    float x;
+    float y;
+    bool active;
 } Platform;
 
 typedef struct {
     Player player;
-    Platform platforms[PLATFORM_COUNT];
-    float scroll_offset;
+    Platform platforms[MAX_PLATFORMS];
     int score;
-    bool running;
+    bool is_running;
     bool move_left;
     bool move_right;
-    float target_scroll_offset;
-    int current_platform;
-    int last_platform_id;
+    int last_platform_touched;
 } GameState;
 
 static void draw_flipper(Canvas* canvas, int x, int y) {
@@ -45,89 +46,148 @@ static void draw_flipper(Canvas* canvas, int x, int y) {
 }
 
 static void input_callback(InputEvent* event, void* context) {
-    GameState* game = context;
-    if (event->type == InputTypeShort) {
-        if (event->key == InputKeyBack) game->running = false;
-    } else if (event->type == InputTypePress || event->type == InputTypeRepeat) {
-        if (event->key == InputKeyLeft) game->move_left = true;
-        if (event->key == InputKeyRight) game->move_right = true;
-    } else if (event->type == InputTypeRelease) {
-        if (event->key == InputKeyLeft) game->move_left = false;
-        if (event->key == InputKeyRight) game->move_right = false;
+    GameState* game = (GameState*)context;
+    
+    // Обработка кнопки Back для выхода
+    if (event->type == InputTypeShort && event->key == InputKeyBack) {
+        game->is_running = false;
+        return;
+    }
+    
+    // Обработка нажатия кнопок направления
+    if (event->type == InputTypePress || event->type == InputTypeRepeat) {
+        if (event->key == InputKeyLeft) {
+            game->move_left = true;
+        } else if (event->key == InputKeyRight) {
+            game->move_right = true;
+        }
+    } 
+    // Обработка отпускания кнопок направления
+    else if (event->type == InputTypeRelease) {
+        if (event->key == InputKeyLeft) {
+            game->move_left = false;
+        } else if (event->key == InputKeyRight) {
+            game->move_right = false;
+        }
     }
 }
 
 static void render_callback(Canvas* canvas, void* context) {
-    GameState* game = context;
+    const GameState* game = (const GameState*)context;
     canvas_clear(canvas);
 
-    for (int i = 0; i < PLATFORM_COUNT; i++) {
-        int py = (int)(game->platforms[i].y + game->scroll_offset);
-        if (py > -PLATFORM_HEIGHT && py < SCREEN_HEIGHT) {
-            canvas_draw_box(canvas, (int)game->platforms[i].x, py, PLATFORM_WIDTH, PLATFORM_HEIGHT);
+    // Отрисовываем платформы
+    for(int i = 0; i < MAX_PLATFORMS; i++) {
+        if(game->platforms[i].active) {
+            canvas_draw_box(canvas, 
+                (int)game->platforms[i].x, 
+                (int)game->platforms[i].y, 
+                PLATFORM_WIDTH, 
+                PLATFORM_HEIGHT);
         }
     }
 
-    int draw_y = (int)(game->player.y + game->scroll_offset);
-    draw_flipper(canvas, (int)game->player.x, draw_y);
+    // Отрисовываем спрайт игрока на текущих координатах
+    draw_flipper(canvas, (int)game->player.x, (int)game->player.y);
 
+    // Отображаем счет в правом верхнем углу
     char score_text[16];
     snprintf(score_text, sizeof(score_text), "Score: %d", game->score);
     canvas_draw_str_aligned(canvas, SCREEN_WIDTH - 2, 0, AlignRight, AlignTop, score_text);
 }
 
-void spawn_new_platform(GameState* game) {
-    int next = game->current_platform % PLATFORM_COUNT;
-    game->platforms[next].x = rand() % (SCREEN_WIDTH - PLATFORM_WIDTH);
-    game->platforms[next].y = game->platforms[(next + PLATFORM_COUNT - 1) % PLATFORM_COUNT].y - (rand() % 20 + 20);
-    game->current_platform++;
+static void apply_gravity(Player* player) {
+    player->velocity_y += GRAVITY;
 }
 
-void init_platforms(GameState* game) {
+static bool check_death_boundary(Player* player) {
+    return player->y >= DEATH_BOUNDARY;
+}
+
+static void init_platforms(GameState* game) {
+    // Первая платформа - стартовая, в центре внизу
     game->platforms[0].x = (float)SCREEN_WIDTH / 2 - (float)PLATFORM_WIDTH / 2;
-    game->platforms[0].y = SCREEN_HEIGHT - 10;
-    for (int i = 1; i < PLATFORM_COUNT; i++) {
-        game->platforms[i].x = rand() % (SCREEN_WIDTH - PLATFORM_WIDTH);
-        game->platforms[i].y = game->platforms[i - 1].y - 30;
+    game->platforms[0].y = SCREEN_HEIGHT - 15;
+    game->platforms[0].active = true;
+    
+    // Генерируем остальные платформы выше
+    for(int i = 1; i < MAX_PLATFORMS; i++) {
+        game->platforms[i].x = (float)(rand() % (SCREEN_WIDTH - PLATFORM_WIDTH));
+        game->platforms[i].y = game->platforms[i-1].y - (20 + rand() % 15);
+        game->platforms[i].active = true;
     }
 }
 
-void update_game(GameState* game) {
+static void check_platform_collision(GameState* game) {
     Player* player = &game->player;
-    if (game->move_left) player->x -= PLAYER_SPEED;
-    if (game->move_right) player->x += PLAYER_SPEED;
-    if (player->x < 0) player->x = SCREEN_WIDTH - PLAYER_WIDTH;
-    if (player->x > SCREEN_WIDTH - PLAYER_WIDTH) player->x = 0;
-    player->vy += GRAVITY;
-    player->y += player->vy;
-    if (player->vy > 0) {
-        for (int i = 0; i < PLATFORM_COUNT; i++) {
-            Platform* p = &game->platforms[i];
-            if (player->x + PLAYER_WIDTH > p->x &&
-                player->x < p->x + PLATFORM_WIDTH &&
-                player->y + PLAYER_HEIGHT >= p->y &&
-                player->y + PLAYER_HEIGHT <= p->y + PLATFORM_HEIGHT) {
-                if (game->last_platform_id != i) {
-                    player->vy = JUMP_VELOCITY;
-                    game->target_scroll_offset += 20.0f;
-                    spawn_new_platform(game);
-                    game->last_platform_id = i;
+    
+    // Проверяем коллизию только если игрок падает вниз
+    if(player->velocity_y <= 0) {
+        return;
+    }
+    
+    for(int i = 0; i < MAX_PLATFORMS; i++) {
+        if(!game->platforms[i].active) continue;
+        
+        Platform* platform = &game->platforms[i];
+        
+        // Проверяем пересечение по X
+        if(player->x + PLAYER_WIDTH > platform->x && 
+           player->x < platform->x + PLATFORM_WIDTH) {
+            
+            // Проверяем пересечение по Y (игрок приземляется сверху)
+            if(player->y + PLAYER_HEIGHT >= platform->y && 
+               player->y + PLAYER_HEIGHT <= platform->y + PLATFORM_HEIGHT + 5) {
+                
+                // Прыжок с платформы
+                player->velocity_y = JUMP_VELOCITY;
+                player->y = platform->y - PLAYER_HEIGHT;
+                
+                // Увеличиваем счет только если это новая платформа
+                if(game->last_platform_touched != i) {
                     game->score++;
-                } else {
-                    player->vy = JUMP_VELOCITY;
+                    game->last_platform_touched = i;
                 }
                 break;
             }
         }
     }
-    if (game->scroll_offset < game->target_scroll_offset) {
-        float delta = game->target_scroll_offset - game->scroll_offset;
-        float step = delta * 0.2f;
-        if (step < 0.5f) step = 0.5f;
-        game->scroll_offset += step;
+}
+
+static void update_physics(GameState* game) {
+    if (!game->is_running) {
+        return;  // Не обновляем позицию если игра закончена
     }
-    if (player->y > SCREEN_HEIGHT) {
-        game->running = false;
+
+    Player* player = &game->player;
+    
+    // Применяем гравитацию
+    apply_gravity(player);
+    
+    // Обновляем вертикальную позицию
+    player->y += player->velocity_y;
+    
+    // Проверяем коллизию с платформами
+    check_platform_collision(game);
+    
+    // Горизонтальное движение
+    if (game->move_left && !game->move_right) {
+        player->x -= HORIZONTAL_SPEED;
+    } else if (game->move_right && !game->move_left) {
+        player->x += HORIZONTAL_SPEED;
+    }
+    // Если обе кнопки нажаты или обе отпущены - не двигаемся
+    
+    // Wrap-around на границах экрана
+    if (player->x < 0) {
+        player->x = SCREEN_WIDTH - PLAYER_WIDTH;
+    } else if (player->x > SCREEN_WIDTH - PLAYER_WIDTH) {
+        player->x = 0;
+    }
+    
+    // Проверяем death boundary (выход за нижнюю границу экрана)
+    if (check_death_boundary(player)) {
+        game->is_running = false;
     }
 }
 
@@ -180,28 +240,58 @@ void show_game_over(Gui* gui, GameState* game) {
 }
 
 void flipperjump_start(void) {
+    // Инициализация генератора случайных чисел
     srand(furi_get_tick());
+    
+    // Инициализация игрового состояния
     GameState game = {
-        .player = {.x = (float)SCREEN_WIDTH / 2, .y = SCREEN_HEIGHT - 20, .vy = 0, .alive = true},
-        .scroll_offset = 0,
-        .running = true,
         .score = 0,
-        .target_scroll_offset = 0,
-        .current_platform = 1,
-        .last_platform_id = 0,
+        .is_running = true,
+        .move_left = false,
+        .move_right = false,
+        .last_platform_touched = -1
     };
+    
+    // Инициализируем платформы
     init_platforms(&game);
+    
+    // Размещаем игрока на первой платформе
+    game.player.x = game.platforms[0].x + (PLATFORM_WIDTH - PLAYER_WIDTH) / 2;
+    game.player.y = game.platforms[0].y - PLAYER_HEIGHT;
+    game.player.velocity_y = 0;
+    game.player.is_alive = true;
+    
+    // Открываем GUI
     Gui* gui = furi_record_open("gui");
+    if (!gui) {
+        return;  // Ошибка инициализации
+    }
+    
+    // Создаем viewport
     ViewPort* viewport = view_port_alloc();
+    if (!viewport) {
+        furi_record_close("gui");
+        return;  // Ошибка инициализации
+    }
+    
+    // Настраиваем callbacks
     view_port_draw_callback_set(viewport, render_callback, &game);
     view_port_input_callback_set(viewport, input_callback, &game);
+    
+    // Добавляем viewport в GUI
     gui_add_view_port(gui, viewport, GuiLayerFullscreen);
-    while (game.running) {
-        update_game(&game);
+    
+    // Главный игровой цикл: update → render → delay
+    while (game.is_running) {
+        update_physics(&game);
         view_port_update(viewport);
-        furi_delay_ms(30);
+        furi_delay_ms(30);  // ~30 FPS
     }
+    
+    // Показываем экран game over
     show_game_over(gui, &game);
+    
+    // Очистка ресурсов в обратном порядке
     gui_remove_view_port(gui, viewport);
     view_port_free(viewport);
     furi_record_close("gui");
